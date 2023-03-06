@@ -224,6 +224,7 @@ class _SuggestionsListState<T> extends State<SuggestionsList<T>> with SingleTick
             _setSuggestions(suggestions, error, suggestionsList.length > 1 ? 1 : null);
           } catch (e) {
             error = e;
+            _currentStreamSubscription?.cancel();
             _setSuggestions(suggestions, error, 1);
           }
         });
