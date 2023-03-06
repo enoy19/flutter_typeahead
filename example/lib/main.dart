@@ -26,7 +26,7 @@ class _MyAppState extends State<MyApp> {
         scrollBehavior:
             MaterialScrollBehavior().copyWith(dragDevices: {PointerDeviceKind.mouse, PointerDeviceKind.touch}),
         home: DefaultTabController(
-          length: 3,
+          length: 4,
           child: Scaffold(
               appBar: AppBar(
                 leading: IconButton(
@@ -38,7 +38,8 @@ class _MyAppState extends State<MyApp> {
                 title: TabBar(tabs: [
                   Tab(text: 'Example 1: Navigation'),
                   Tab(text: 'Example 2: Form'),
-                  Tab(text: 'Example 3: Scroll')
+                  Tab(text: 'Example 3: Scroll'),
+                  Tab(text: 'Example 4: Stream'),
                 ]),
               ),
               body: GestureDetector(
@@ -47,6 +48,7 @@ class _MyAppState extends State<MyApp> {
                   NavigationExample(),
                   FormExample(),
                   ScrollExample(),
+                  StreamExample(),
                 ]),
               )),
         ),
@@ -187,6 +189,50 @@ class _FormExampleState extends State<FormExample> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class StreamExample extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.all(32.0),
+      child: Column(
+        children: <Widget>[
+          SizedBox(
+            height: 10.0,
+          ),
+          TypeAheadField(
+            textFieldConfiguration: TextFieldConfiguration(
+              autofocus: true,
+              style: DefaultTextStyle.of(context).style.copyWith(fontStyle: FontStyle.italic),
+              decoration: InputDecoration(border: OutlineInputBorder(), hintText: 'What are you looking for?'),
+            ),
+            suggestionsStreamCallback: (pattern) async* {
+              final random = Random();
+              for (var i = 0; i < 10; i++) {
+                await Future<void>.delayed(Duration(milliseconds: random.nextInt(1000)));
+                yield 'Suggestion $pattern $i';
+              }
+            },
+            itemBuilder: (context, String suggestion) {
+              return ListTile(
+                leading: Icon(Icons.shopping_cart),
+                title: Text(suggestion),
+              );
+            },
+            onSuggestionSelected: (x) {
+              print(x);
+            },
+            suggestionsBoxDecoration: SuggestionsBoxDecoration(
+              borderRadius: BorderRadius.circular(10.0),
+              elevation: 8.0,
+              color: Theme.of(context).cardColor,
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -15,6 +15,7 @@ class SuggestionsList<T> extends StatefulWidget {
   final bool getImmediateSuggestions;
   final SuggestionSelectionCallback<T>? onSuggestionSelected;
   final SuggestionsCallback<T>? suggestionsCallback;
+  final SuggestionsStreamCallback<T>? suggestionsStreamCallback;
   final ItemBuilder<T>? itemBuilder;
   final ScrollController? scrollController;
   final SuggestionsBoxDecoration? decoration;
@@ -32,8 +33,7 @@ class SuggestionsList<T> extends StatefulWidget {
   final bool? keepSuggestionsOnLoading;
   final int? minCharsForSuggestions;
   final KeyboardSuggestionSelectionNotifier keyboardSuggestionSelectionNotifier;
-  final ShouldRefreshSuggestionFocusIndexNotifier
-  shouldRefreshSuggestionFocusIndexNotifier;
+  final ShouldRefreshSuggestionFocusIndexNotifier shouldRefreshSuggestionFocusIndexNotifier;
   final VoidCallback giveTextFieldFocus;
   final VoidCallback onSuggestionFocus;
   final KeyEventResult Function(FocusNode _, RawKeyEvent event) onKeyEvent;
@@ -45,6 +45,7 @@ class SuggestionsList<T> extends StatefulWidget {
     this.getImmediateSuggestions = false,
     this.onSuggestionSelected,
     this.suggestionsCallback,
+    this.suggestionsStreamCallback,
     this.itemBuilder,
     this.scrollController,
     this.decoration,
@@ -73,8 +74,7 @@ class SuggestionsList<T> extends StatefulWidget {
   _SuggestionsListState<T> createState() => _SuggestionsListState<T>();
 }
 
-class _SuggestionsListState<T> extends State<SuggestionsList<T>>
-    with SingleTickerProviderStateMixin {
+class _SuggestionsListState<T> extends State<SuggestionsList<T>> with SingleTickerProviderStateMixin {
   Iterable<T>? _suggestions;
   late bool _suggestionsValid;
   late VoidCallback _controllerListener;
@@ -83,10 +83,10 @@ class _SuggestionsListState<T> extends State<SuggestionsList<T>>
   Object? _error;
   AnimationController? _animationController;
   String? _lastTextValue;
-  late final ScrollController _scrollController =
-      widget.scrollController ?? ScrollController();
+  late final ScrollController _scrollController = widget.scrollController ?? ScrollController();
   List<FocusNode> _focusNodes = [];
   int _suggestionIndex = -1;
+  StreamSubscription<T>? _currentStreamSubscription;
 
   _SuggestionsListState() {
     this._controllerListener = () {
@@ -162,8 +162,7 @@ class _SuggestionsListState<T> extends State<SuggestionsList<T>>
       final event = widget.keyboardSuggestionSelectionNotifier.value;
       if (event == null || suggestionsLength == null) return;
 
-      if (event == LogicalKeyboardKey.arrowDown &&
-          _suggestionIndex < suggestionsLength - 1) {
+      if (event == LogicalKeyboardKey.arrowDown && _suggestionIndex < suggestionsLength - 1) {
         _suggestionIndex++;
       } else if (event == LogicalKeyboardKey.arrowUp && _suggestionIndex > -1) {
         _suggestionIndex--;
@@ -205,34 +204,56 @@ class _SuggestionsListState<T> extends State<SuggestionsList<T>>
       Iterable<T>? suggestions;
       Object? error;
 
-      try {
-        suggestions =
-        await widget.suggestionsCallback!(widget.controller!.text);
-      } catch (e) {
-        error = e;
-      }
+      if (widget.suggestionsCallback != null) {
+        try {
+          suggestions = await widget.suggestionsCallback!(widget.controller!.text);
+        } catch (e) {
+          error = e;
+        }
 
-      if (this.mounted) {
-        // if it wasn't removed in the meantime
-        setState(() {
-          double? animationStart = widget.animationStart;
-          // allow suggestionsCallback to return null and not throw error here
-          if (error != null || suggestions?.isEmpty == true) {
-            animationStart = 1.0;
+        _setSuggestions(suggestions, error);
+      } else if (widget.suggestionsStreamCallback != null) {
+        await _currentStreamSubscription?.cancel();
+        final suggestionStream = widget.suggestionsStreamCallback!(widget.controller!.text);
+
+        final suggestionsList = <T>[];
+        suggestions = suggestionsList;
+        _currentStreamSubscription = suggestionStream.listen((suggestion) {
+          try {
+            suggestionsList.add(suggestion);
+            _setSuggestions(suggestions, error, suggestionsList.length > 1 ? 1 : null);
+          } catch (e) {
+            error = e;
+            _setSuggestions(suggestions, error, 1);
           }
-          this._animationController!.forward(from: animationStart);
-
-          this._error = error;
-          this._isLoading = false;
-          this._suggestions = suggestions;
-          _focusNodes = List.generate(
-            _suggestions?.length ?? 0,
-                (index) => FocusNode(onKey: (_, event) {
-              return widget.onKeyEvent(_, event);
-            }),
-          );
         });
+      } else {
+        throw Exception('invalid suggestion callback');
       }
+    }
+  }
+
+  void _setSuggestions(Iterable<T>? suggestions, Object? error, [double? animationStart]) {
+    if (this.mounted) {
+      // if it wasn't removed in the meantime
+      setState(() {
+        animationStart ??= widget.animationStart;
+        // allow suggestionsCallback to return null and not throw error here
+        if (error != null || suggestions?.isEmpty == true) {
+          animationStart = 1.0;
+        }
+        this._animationController!.forward(from: animationStart);
+
+        this._error = error;
+        this._isLoading = false;
+        this._suggestions = suggestions;
+        _focusNodes = List.generate(
+          _suggestions?.length ?? 0,
+          (index) => FocusNode(onKey: (_, event) {
+            return widget.onKeyEvent(_, event);
+          }),
+        );
+      });
     }
   }
 
@@ -248,11 +269,8 @@ class _SuggestionsListState<T> extends State<SuggestionsList<T>>
 
   @override
   Widget build(BuildContext context) {
-    bool isEmpty =
-        this._suggestions?.length == 0 && widget.controller!.text == "";
-    if ((this._suggestions == null || isEmpty) &&
-        this._isLoading == false &&
-        this._error == null) return Container();
+    bool isEmpty = this._suggestions?.length == 0 && widget.controller!.text == "";
+    if ((this._suggestions == null || isEmpty) && this._isLoading == false && this._error == null) return Container();
 
     Widget child;
     if (this._isLoading!) {
@@ -280,12 +298,10 @@ class _SuggestionsListState<T> extends State<SuggestionsList<T>>
     final animationChild = widget.transitionBuilder != null
         ? widget.transitionBuilder!(context, child, this._animationController)
         : SizeTransition(
-      axisAlignment: -1.0,
-      sizeFactor: CurvedAnimation(
-          parent: this._animationController!,
-          curve: Curves.fastOutSlowIn),
-      child: child,
-    );
+            axisAlignment: -1.0,
+            sizeFactor: CurvedAnimation(parent: this._animationController!, curve: Curves.fastOutSlowIn),
+            child: child,
+          );
 
     BoxConstraints constraints;
     if (widget.decoration!.constraints == null) {
@@ -293,8 +309,7 @@ class _SuggestionsListState<T> extends State<SuggestionsList<T>>
         maxHeight: widget.suggestionsBox!.maxHeight,
       );
     } else {
-      double maxHeight = min(widget.decoration!.constraints!.maxHeight,
-          widget.suggestionsBox!.maxHeight);
+      double maxHeight = min(widget.decoration!.constraints!.maxHeight, widget.suggestionsBox!.maxHeight);
       constraints = widget.decoration!.constraints!.copyWith(
         minHeight: min(widget.decoration!.constraints!.minHeight, maxHeight),
         maxHeight: maxHeight,
@@ -330,12 +345,12 @@ class _SuggestionsListState<T> extends State<SuggestionsList<T>>
       child = widget.loadingBuilder != null
           ? widget.loadingBuilder!(context)
           : Align(
-        alignment: Alignment.center,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8.0),
-          child: CircularProgressIndicator(),
-        ),
-      );
+              alignment: Alignment.center,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8.0),
+                child: CircularProgressIndicator(),
+              ),
+            );
     }
 
     return child;
@@ -345,26 +360,25 @@ class _SuggestionsListState<T> extends State<SuggestionsList<T>>
     return widget.errorBuilder != null
         ? widget.errorBuilder!(context, this._error)
         : Padding(
-      padding: const EdgeInsets.all(8.0),
-      child: Text(
-        'Error: ${this._error}',
-        style: TextStyle(color: Theme.of(context).colorScheme.error),
-      ),
-    );
+            padding: const EdgeInsets.all(8.0),
+            child: Text(
+              'Error: ${this._error}',
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          );
   }
 
   Widget createNoItemsFoundWidget() {
     return widget.noItemsFoundBuilder != null
         ? widget.noItemsFoundBuilder!(context)
         : Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
-      child: Text(
-        'No Items Found!',
-        textAlign: TextAlign.center,
-        style: TextStyle(
-            color: Theme.of(context).disabledColor, fontSize: 18.0),
-      ),
-    );
+            padding: const EdgeInsets.symmetric(vertical: 8.0),
+            child: Text(
+              'No Items Found!',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Theme.of(context).disabledColor, fontSize: 18.0),
+            ),
+          );
   }
 
   Widget createSuggestionsWidget() {
@@ -376,9 +390,8 @@ class _SuggestionsListState<T> extends State<SuggestionsList<T>>
           ? ScrollViewKeyboardDismissBehavior.onDrag
           : ScrollViewKeyboardDismissBehavior.manual,
       controller: _scrollController,
-      reverse: widget.suggestionsBox!.direction == AxisDirection.down
-          ? false
-          : widget.suggestionsBox!.autoFlipListDirection,
+      reverse:
+          widget.suggestionsBox!.direction == AxisDirection.down ? false : widget.suggestionsBox!.autoFlipListDirection,
       children: List.generate(this._suggestions!.length, (index) {
         final suggestion = _suggestions!.elementAt(index);
         final focusNode = _focusNodes[index];
